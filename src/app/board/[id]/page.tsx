@@ -6,10 +6,9 @@ import { ReactFlow, Background, Controls, applyNodeChanges, applyEdgeChanges, ad
 // @ts-ignore
 import '@xyflow/react/dist/style.css'; 
 
-import { db, storage } from '@/lib/firebase';
+import { db } from '@/lib/firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, deleteDoc, query, where, writeBatch, getDoc } from 'firebase/firestore';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { Type, Code2, Image as ImageIcon, Video, X, ChevronLeft, Square, Circle, Diamond, Shapes, Loader2, UploadCloud, Wand2, Copy, Globe, Lock, Search, PictureInPicture2, Database, Sparkles, MessageSquare, Send, Link2, Trash2, Share2, Check, ChevronDown, Maximize2, Minimize2 } from 'lucide-react';
+import { Type, Code2, Image as ImageIcon, Video, X, ChevronLeft, Square, Circle, Diamond, Shapes, Loader2, Wand2, Copy, Globe, Lock, Search, PictureInPicture2, Database, Sparkles, Send, Link2, Trash2, Check, ChevronDown, Maximize2, Minimize2 } from 'lucide-react';
 import AICardNode from '@/components/AICardNode';
 import ShapeNode from '@/components/ShapeNode';
 
@@ -211,12 +210,10 @@ function CanvasBoard() {
     let cardTitle = 'Embedded Content';
 
     try {
-      // 1. Detect AI Links (ChatGPT / Gemini)
       if (userInput.includes('chatgpt.com') || userInput.includes('chat.openai.com') || userInput.includes('gemini.google.com')) {
-        cardType = 'bookmark'; // Special visual card instead of iframe
+        cardType = 'bookmark'; 
         cardTitle = userInput.includes('gemini') ? 'Gemini Session' : 'ChatGPT Session';
       } 
-      // 2. Detect Standard Embeds
       else if (userInput.includes('figma.com')) {
         embedUrl = `https://www.figma.com/embed?embed_host=share&url=${encodeURIComponent(userInput)}`;
         cardTitle = 'Figma Design';
@@ -284,33 +281,44 @@ function CanvasBoard() {
       console.error(e);
       alert("Failed to save snippet.");
     } finally {
-      // FIX: Guarantees modal disappears when done
       closeModal(); 
     }
   };
 
+  // --- NEW: DIRECT FIRESTORE IMAGE UPLOAD (BASE64) ---
   const handleFileUpload = async (file: File | undefined, dropX?: number, dropY?: number) => {
     if (!file) return;
+
+    // Strict 1MB Check for Firestore Documents
+    const MAX_FILE_SIZE = 1000000; 
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`⚠️ File is too large! The database has a strict 1MB limit. Please choose a smaller file.`);
+      return;
+    }
+
     setIsUploading(true);
     const fileType = file.type.startsWith('video/') ? 'video' : 'image';
-    
+
     try {
-      const storageRef = ref(storage, `boards/${boardId}/${Date.now()}_${file.name}`);
-      const uploadTask = await uploadBytesResumable(storageRef, file);
-      const downloadURL = await getDownloadURL(uploadTask.ref);
-      await setDoc(doc(db, 'snippets', `node_${Date.now()}`), {
-        boardId, type: 'aiCard', position: { x: dropX || window.innerWidth/2, y: dropY || window.innerHeight/2 },
-        data: { type: fileType, title: file.name, content: downloadURL, timestamp: new Date().toISOString() }
-      });
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = async () => {
+        const base64Content = reader.result as string;
+        
+        await setDoc(doc(db, 'snippets', `node_${Date.now()}`), {
+          boardId, type: 'aiCard', position: { x: dropX || window.innerWidth/2, y: dropY || window.innerHeight/2 },
+          data: { type: fileType, title: file.name, content: base64Content, timestamp: new Date().toISOString() }
+        });
+        setIsUploading(false);
+      };
+      reader.onerror = (error) => {
+        console.error("Error converting file:", error);
+        alert("Failed to read file for database storage.");
+        setIsUploading(false);
+      };
     } catch (e: any) { 
       console.error(e); 
-      // FIX: Better error handling if firebase config is missing bucket
-      if (e?.message?.includes("no-default-bucket")) {
-        alert("Firebase Storage Error: Please add NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET to your .env.local file.");
-      } else {
-        alert(`Upload failed: ${e.message}`);
-      }
-    } finally { 
+      alert(`Upload failed: ${e.message}`);
       setIsUploading(false); 
     }
   };
