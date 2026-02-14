@@ -1,6 +1,8 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+/* Add this line here to fix the infinite glitch! */
+@import "@xyflow/react/dist/style.css";
 
 :root {
   --foreground-rgb: 0, 0, 0;
