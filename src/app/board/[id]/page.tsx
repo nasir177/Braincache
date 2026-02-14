@@ -73,7 +73,7 @@ function CanvasBoard() {
 
   // --- GEMINI CHAT STATES ---
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [isFullscreenChat, setIsFullscreenChat] = useState(false); // NEW: Fullscreen toggle
+  const [isFullscreenChat, setIsFullscreenChat] = useState(false); 
   const [chatMessages, setChatMessages] = useState<{role: 'user'|'ai', text: string}[]>([{ role: 'ai', text: 'Hello! I am your AI assistant. How can I help you with this workspace today?' }]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
@@ -200,22 +200,41 @@ function CanvasBoard() {
   };
 
   const handleAddEmbed = () => {
-    const userInput = prompt("Paste link (Figma, YouTube, Google Docs/Sheets/Slides):");
+    const userInput = prompt("Paste link (Figma, YouTube, Docs, ChatGPT, Gemini):");
     if (!userInput) return;
     if (userInput.includes('localhost') || userInput.includes('127.0.0.1') || (typeof window !== 'undefined' && userInput.includes(window.location.host))) {
       alert("⚠️ Cannot embed the board into itself!"); return;
     }
+
     let embedUrl = userInput;
+    let cardType = 'embed';
+    let cardTitle = 'Embedded Content';
+
     try {
-      if (userInput.includes('figma.com')) embedUrl = `https://www.figma.com/embed?embed_host=share&url=${encodeURIComponent(userInput)}`;
-      else if (userInput.includes('youtube.com/watch?v=')) embedUrl = userInput.replace('watch?v=', 'embed/').split('&')[0];
-      else if (userInput.includes('youtu.be/')) embedUrl = `https://www.youtube.com/embed/${userInput.split('youtu.be/')[1].split('?')[0]}`;
-      else if (userInput.includes('docs.google.com')) embedUrl = userInput.replace(/\/edit.*$/, '/preview');
+      // 1. Detect AI Links (ChatGPT / Gemini)
+      if (userInput.includes('chatgpt.com') || userInput.includes('chat.openai.com') || userInput.includes('gemini.google.com')) {
+        cardType = 'bookmark'; // Special visual card instead of iframe
+        cardTitle = userInput.includes('gemini') ? 'Gemini Session' : 'ChatGPT Session';
+      } 
+      // 2. Detect Standard Embeds
+      else if (userInput.includes('figma.com')) {
+        embedUrl = `https://www.figma.com/embed?embed_host=share&url=${encodeURIComponent(userInput)}`;
+        cardTitle = 'Figma Design';
+      } else if (userInput.includes('youtube.com/watch?v=')) {
+        embedUrl = userInput.replace('watch?v=', 'embed/').split('&')[0];
+        cardTitle = 'YouTube Video';
+      } else if (userInput.includes('youtu.be/')) {
+        embedUrl = `https://www.youtube.com/embed/${userInput.split('youtu.be/')[1].split('?')[0]}`;
+        cardTitle = 'YouTube Video';
+      } else if (userInput.includes('docs.google.com')) {
+        embedUrl = userInput.replace(/\/edit.*$/, '/preview');
+        cardTitle = 'Google Document';
+      }
     } catch (e) { console.error("URL Parse error", e); }
 
     setDoc(doc(db, 'snippets', `node_${Date.now()}`), {
       boardId, type: 'aiCard', position: { x: window.innerWidth/2, y: window.innerHeight/2 },
-      data: { type: 'embed', title: 'Embedded Content', content: embedUrl, timestamp: new Date().toISOString() }
+      data: { type: cardType, title: cardTitle, content: embedUrl, timestamp: new Date().toISOString() }
     });
   };
 
@@ -251,27 +270,49 @@ function CanvasBoard() {
 
   const saveSnippet = async () => {
     if (!content && activeType !== 'image' && activeType !== 'video') return;
-    const textToEmbed = `${title} ${content}`;
-    const embedding = await generateEmbedding(textToEmbed);
-    const dataPayload = { boardId, type: 'aiCard', position: { x: window.innerWidth/2, y: window.innerHeight/2 }, data: { type: activeType, title: title || 'Untitled', content, link, timestamp: new Date().toISOString(), embedding } };
-    if (editingNodeId) await updateDoc(doc(db, 'snippets', editingNodeId), { 'data.title': title, 'data.content': content, 'data.link': link, 'data.embedding': embedding });
-    else await setDoc(doc(db, 'snippets', `node_${Date.now()}`), dataPayload);
-    closeModal();
+    try {
+      const textToEmbed = `${title} ${content}`;
+      const embedding = await generateEmbedding(textToEmbed);
+      const dataPayload = { boardId, type: 'aiCard', position: { x: window.innerWidth/2, y: window.innerHeight/2 }, data: { type: activeType, title: title || 'Untitled', content, link, timestamp: new Date().toISOString(), embedding } };
+      
+      if (editingNodeId) {
+        await updateDoc(doc(db, 'snippets', editingNodeId), { 'data.title': title, 'data.content': content, 'data.link': link, 'data.embedding': embedding });
+      } else {
+        await setDoc(doc(db, 'snippets', `node_${Date.now()}`), dataPayload);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Failed to save snippet.");
+    } finally {
+      // FIX: Guarantees modal disappears when done
+      closeModal(); 
+    }
   };
 
   const handleFileUpload = async (file: File | undefined, dropX?: number, dropY?: number) => {
     if (!file) return;
     setIsUploading(true);
     const fileType = file.type.startsWith('video/') ? 'video' : 'image';
-    const storageRef = ref(storage, `boards/${boardId}/${Date.now()}_${file.name}`);
+    
     try {
+      const storageRef = ref(storage, `boards/${boardId}/${Date.now()}_${file.name}`);
       const uploadTask = await uploadBytesResumable(storageRef, file);
       const downloadURL = await getDownloadURL(uploadTask.ref);
       await setDoc(doc(db, 'snippets', `node_${Date.now()}`), {
         boardId, type: 'aiCard', position: { x: dropX || window.innerWidth/2, y: dropY || window.innerHeight/2 },
         data: { type: fileType, title: file.name, content: downloadURL, timestamp: new Date().toISOString() }
       });
-    } catch (e) { console.error(e); alert("Upload failed."); } finally { setIsUploading(false); }
+    } catch (e: any) { 
+      console.error(e); 
+      // FIX: Better error handling if firebase config is missing bucket
+      if (e?.message?.includes("no-default-bucket")) {
+        alert("Firebase Storage Error: Please add NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET to your .env.local file.");
+      } else {
+        alert(`Upload failed: ${e.message}`);
+      }
+    } finally { 
+      setIsUploading(false); 
+    }
   };
 
   const addShape = async (shapeType: string) => {
@@ -350,7 +391,6 @@ function CanvasBoard() {
             : "absolute bottom-24 right-6 w-[420px] max-w-[90vw] h-[650px] bg-white border border-gray-200 rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-5 z-40"
         }>
           
-          {/* Minimalist White Header */}
           <div className="px-6 py-4 flex justify-between items-center bg-white border-b border-gray-100 shrink-0">
             <div className="flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-blue-600" />
@@ -366,21 +406,12 @@ function CanvasBoard() {
             </div>
           </div>
 
-          {/* Chat History Area (Centered if Fullscreen) */}
           <div ref={chatScrollRef} className="flex-1 overflow-y-auto bg-white">
             <div className={`mx-auto w-full space-y-8 py-8 ${isFullscreenChat ? 'max-w-4xl px-8' : 'px-5'}`}>
               
               {chatMessages.map((msg, i) => (
                 <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start gap-4'}`}>
-                  
-                  {/* AI Sparkle Icon */}
-                  {msg.role === 'ai' && (
-                    <div className="shrink-0 mt-1">
-                      <Sparkles className="w-6 h-6 text-blue-600" />
-                    </div>
-                  )}
-
-                  {/* Message Bubble/Text */}
+                  {msg.role === 'ai' && <div className="shrink-0 mt-1"><Sparkles className="w-6 h-6 text-blue-600" /></div>}
                   {msg.role === 'user' ? (
                     <div className="bg-gray-100 text-gray-900 px-5 py-3 rounded-[24px] rounded-br-sm max-w-[85%] text-[15px] font-medium leading-relaxed shadow-sm">
                       {msg.text}
@@ -390,11 +421,9 @@ function CanvasBoard() {
                       {msg.text}
                     </div>
                   )}
-
                 </div>
               ))}
 
-              {/* Gemini Loading State */}
               {isChatLoading && (
                 <div className="flex justify-start gap-4">
                   <div className="shrink-0 mt-1"><Sparkles className="w-6 h-6 text-blue-600 animate-pulse" /></div>
@@ -406,7 +435,6 @@ function CanvasBoard() {
             </div>
           </div>
 
-          {/* Gemini-Style Input Area */}
           <div className={`bg-white shrink-0 pb-6 pt-2 ${isFullscreenChat ? 'w-full max-w-4xl mx-auto px-8' : 'px-5'}`}>
             <form onSubmit={handleSendMessage} className="relative flex items-end gap-2 bg-gray-100 rounded-[28px] p-2 focus-within:bg-gray-200/50 transition-colors border border-gray-200/50">
               <input 
@@ -429,7 +457,7 @@ function CanvasBoard() {
         </div>
       )}
 
-      {/* Floating Chat Toggle Button (Hidden when fullscreen) */}
+      {/* Floating Chat Toggle Button */}
       {!isFullscreenChat && (
         <div className={`absolute bottom-6 right-6 z-30 ${isOverlay ? 'hidden' : ''}`}>
           <button 

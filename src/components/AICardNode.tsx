@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef, useCallback } from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { ExternalLink, Clock, Code2, Image as ImageIcon, Video, MessageSquare, ChevronDown, ChevronUp, Eye, Trash2, Edit3, Share2, Layers, Sparkles, Loader2, Link2 } from 'lucide-react';
+import { ExternalLink, Clock, Code2, Image as ImageIcon, Video, MessageSquare, ChevronDown, ChevronUp, Eye, Trash2, Edit3, Share2, Layers, Sparkles, Loader2, Link2, Bot } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { format } from 'date-fns';
@@ -17,7 +17,8 @@ export default function AICardNode({ id, data }: { id: string; data: any }) {
   const [isExplaining, setIsExplaining] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   
-  const Icon = data.type === 'code' ? Code2 : data.type === 'image' ? ImageIcon : data.type === 'video' ? Video : data.type === 'embed' ? Link2 : MessageSquare;
+  // Choose Icon dynamically based on type (Added bookmark for GPT/Gemini)
+  const Icon = data.type === 'code' ? Code2 : data.type === 'image' ? ImageIcon : data.type === 'video' ? Video : data.type === 'embed' ? Link2 : data.type === 'bookmark' ? ExternalLink : MessageSquare;
   const isHighlighted = data.isSearchResult;
 
   const handleDelete = () => deleteDoc(doc(db, 'snippets', id));
@@ -84,9 +85,9 @@ export default function AICardNode({ id, data }: { id: string; data: any }) {
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-white/80 backdrop-blur-sm p-1 rounded-lg z-10">
           {data.type === 'code' && <button onClick={handleExplainCode} className="p-1.5 text-purple-600 hover:bg-purple-50 rounded-md" title="AI Explain"><Sparkles className="w-4 h-4" /></button>}
           <button onClick={shareCard} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md" title="Share"><Share2 className="w-4 h-4" /></button>
-          {data.type !== 'embed' && <button onClick={handleEdit} className="p-1.5 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-md" title="Edit"><Edit3 className="w-4 h-4" /></button>}
+          {data.type !== 'embed' && data.type !== 'bookmark' && <button onClick={handleEdit} className="p-1.5 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-md" title="Edit"><Edit3 className="w-4 h-4" /></button>}
           <button onClick={handleDelete} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md" title="Delete"><Trash2 className="w-4 h-4" /></button>
-          {data.type === 'embed' && <a href={data.content} target="_blank" rel="noreferrer" className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md" title="Open Link"><ExternalLink className="w-4 h-4" /></a>}
+          {(data.type === 'embed' || data.type === 'bookmark') && <a href={data.content} target="_blank" rel="noreferrer" className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-md" title="Open Link"><ExternalLink className="w-4 h-4" /></a>}
         </div>
       </div>
 
@@ -102,9 +103,18 @@ export default function AICardNode({ id, data }: { id: string; data: any }) {
       {/* Body */}
       <div className={`p-5 nodrag cursor-text text-sm text-gray-800 bg-white relative ${!isExpanded && (data.type === 'text' || data.type === 'code') ? 'max-h-[280px] overflow-hidden' : ''}`}>
         
-        {data.type === 'embed' ? (
+        {data.type === 'bookmark' ? (
+           <div className="w-full h-[180px] rounded-xl border border-gray-200 bg-gray-50 flex flex-col items-center justify-center p-6 text-center">
+             <div className="p-3 bg-white rounded-full shadow-sm border border-gray-100 mb-3">
+               <Bot className="w-8 h-8 text-blue-600" />
+             </div>
+             <p className="text-sm font-bold text-gray-800 mb-4">{data.title || "AI Session"}</p>
+             <a href={data.content} target="_blank" rel="noreferrer" className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors flex items-center gap-2 shadow-sm">
+               Open Link <ExternalLink className="w-4 h-4" />
+             </a>
+           </div>
+        ) : data.type === 'embed' ? (
            <div className="w-full h-[320px] rounded-xl overflow-hidden border border-gray-200 bg-gray-50 flex items-center justify-center relative">
-              {/* Professional iframe wrapper */}
               <iframe src={data.content} className="w-full h-full border-0 absolute inset-0" allowFullScreen loading="lazy" />
            </div>
         ) : data.type === 'code' ? (
