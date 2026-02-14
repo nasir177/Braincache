@@ -1,7 +1,7 @@
 'use client';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { ReactFlow, Background, Controls, applyNodeChanges, applyEdgeChanges, addEdge, NodeChange, EdgeChange, Connection, Node, Edge, useReactFlow, ReactFlowProvider } from '@xyflow/react';
+import { ReactFlow, Background, Controls, applyNodeChanges, applyEdgeChanges, addEdge, NodeChange, EdgeChange, Connection, Node, Edge, useReactFlow, ReactFlowProvider, MarkerType } from '@xyflow/react';
 
 // @ts-ignore
 import '@xyflow/react/dist/style.css'; 
@@ -14,17 +14,13 @@ import ShapeNode from '@/components/ShapeNode';
 
 const nodeTypes = { aiCard: AICardNode, shape: ShapeNode };
 
-// --- AI MATH ---
 function cosineSimilarity(vecA: number[], vecB: number[]) {
   let dotProduct = 0, normA = 0, normB = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dotProduct += vecA[i] * vecB[i]; normA += vecA[i] * vecA[i]; normB += vecB[i] * vecB[i];
-  }
+  for (let i = 0; i < vecA.length; i++) { dotProduct += vecA[i] * vecB[i]; normA += vecA[i] * vecA[i]; normB += vecB[i] * vecB[i]; }
   if (normA === 0 || normB === 0) return 0;
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// --- AI API ---
 async function generateEmbedding(text: string) {
   const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
   if (!apiKey) return null;
@@ -59,18 +55,21 @@ function CanvasBoard() {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [boardData, setBoardData] = useState<any>(null);
   
-  // UI States
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeType, setActiveType] = useState('text');
   const [isDiagramMenuOpen, setIsDiagramMenuOpen] = useState(false);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+  
+  // --- NEW: Custom Embed Modal State ---
+  const [isEmbedModalOpen, setIsEmbedModalOpen] = useState(false);
+  const [embedInput, setEmbedInput] = useState('');
+
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchingAI, setIsSearchingAI] = useState(false);
 
-  // --- GEMINI CHAT STATES ---
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isFullscreenChat, setIsFullscreenChat] = useState(false); 
   const [chatMessages, setChatMessages] = useState<{role: 'user'|'ai', text: string}[]>([{ role: 'ai', text: 'Hello! I am your AI assistant. How can I help you with this workspace today?' }]);
@@ -90,7 +89,6 @@ function CanvasBoard() {
     if (chatScrollRef.current) chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
   }, [chatMessages, isChatLoading, isFullscreenChat]);
 
-  // Initial Setup
   useEffect(() => {
     if (!boardId) return;
     const fetchBoardMeta = async () => {
@@ -115,7 +113,6 @@ function CanvasBoard() {
     return () => { unsubNodes(); unsubEdges(); window.removeEventListener('editNode', handleEditEvent); };
   }, [boardId]);
 
-  // React Flow Handlers
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setNodes((nds) => applyNodeChanges(changes, nds));
     changes.forEach((change) => {
@@ -130,13 +127,21 @@ function CanvasBoard() {
     });
   }, []);
 
+  // --- ARROW STYLE UPDATED: Solid line with arrow head ---
   const onConnect = useCallback((params: Connection) => {
-    const newEdge = { ...params, id: `edge_${Date.now()}`, type: 'smoothstep', animated: true, boardId };
+    const newEdge = { 
+      ...params, 
+      id: `edge_${Date.now()}`, 
+      type: 'bezier', // Smooth curve
+      animated: false, // Solid line
+      style: { stroke: '#1f2937', strokeWidth: 2 }, // Dark elegant line
+      markerEnd: { type: MarkerType.ArrowClosed, width: 20, height: 20, color: '#1f2937' }, // Arrow Head
+      boardId 
+    };
     setEdges((eds) => addEdge(newEdge as unknown as Edge, eds));
     setDoc(doc(db, 'boardEdges', newEdge.id), newEdge);
   }, [boardId]);
 
-  // --- GEMINI CHAT ENGINE ---
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || isChatLoading) return;
@@ -170,7 +175,6 @@ function CanvasBoard() {
     } finally { setIsChatLoading(false); }
   };
 
-  // --- AI SEARCH ENGINE ---
   const executeSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) {
@@ -198,41 +202,46 @@ function CanvasBoard() {
     } finally { setIsSearchingAI(false); }
   };
 
-  const handleAddEmbed = () => {
-    const userInput = prompt("Paste link (Figma, YouTube, Docs, ChatGPT, Gemini):");
-    if (!userInput) return;
-    if (userInput.includes('localhost') || userInput.includes('127.0.0.1') || (typeof window !== 'undefined' && userInput.includes(window.location.host))) {
+  // --- NEW: Custom Embed Modal Logic ---
+  const saveEmbedCard = () => {
+    if (!embedInput) return;
+    
+    // Safety check to prevent the "Inception Glitch"
+    if (embedInput.includes('localhost') || embedInput.includes('127.0.0.1') || (typeof window !== 'undefined' && embedInput.includes(window.location.host))) {
       alert("⚠️ Cannot embed the board into itself!"); return;
     }
 
-    let embedUrl = userInput;
+    let finalUrl = embedInput;
     let cardType = 'embed';
     let cardTitle = 'Embedded Content';
 
     try {
-      if (userInput.includes('chatgpt.com') || userInput.includes('chat.openai.com') || userInput.includes('gemini.google.com')) {
+      if (embedInput.includes('chatgpt.com') || embedInput.includes('chat.openai.com') || embedInput.includes('gemini.google.com')) {
         cardType = 'bookmark'; 
-        cardTitle = userInput.includes('gemini') ? 'Gemini Session' : 'ChatGPT Session';
-      } 
-      else if (userInput.includes('figma.com')) {
-        embedUrl = `https://www.figma.com/embed?embed_host=share&url=${encodeURIComponent(userInput)}`;
+        cardTitle = embedInput.includes('gemini') ? 'Gemini Session' : 'ChatGPT Session';
+      } else if (embedInput.includes('figma.com')) {
+        finalUrl = `https://www.figma.com/embed?embed_host=share&url=${encodeURIComponent(embedInput)}`;
         cardTitle = 'Figma Design';
-      } else if (userInput.includes('youtube.com/watch?v=')) {
-        embedUrl = userInput.replace('watch?v=', 'embed/').split('&')[0];
+      } else if (embedInput.includes('youtube.com/watch?v=')) {
+        finalUrl = embedInput.replace('watch?v=', 'embed/').split('&')[0];
         cardTitle = 'YouTube Video';
-      } else if (userInput.includes('youtu.be/')) {
-        embedUrl = `https://www.youtube.com/embed/${userInput.split('youtu.be/')[1].split('?')[0]}`;
+      } else if (embedInput.includes('youtu.be/')) {
+        finalUrl = `https://www.youtube.com/embed/${embedInput.split('youtu.be/')[1].split('?')[0]}`;
         cardTitle = 'YouTube Video';
-      } else if (userInput.includes('docs.google.com')) {
-        embedUrl = userInput.replace(/\/edit.*$/, '/preview');
+      } else if (embedInput.includes('docs.google.com')) {
+        finalUrl = embedInput.replace(/\/edit.*$/, '/preview');
         cardTitle = 'Google Document';
       }
     } catch (e) { console.error("URL Parse error", e); }
 
     setDoc(doc(db, 'snippets', `node_${Date.now()}`), {
       boardId, type: 'aiCard', position: { x: window.innerWidth/2, y: window.innerHeight/2 },
-      data: { type: cardType, title: cardTitle, content: embedUrl, timestamp: new Date().toISOString() }
+      data: { type: cardType, title: cardTitle, content: finalUrl, timestamp: new Date().toISOString() }
     });
+    
+    // Close Modal instantly
+    setIsEmbedModalOpen(false);
+    setEmbedInput('');
   };
 
   const clearBoard = async () => {
@@ -279,46 +288,32 @@ function CanvasBoard() {
       }
     } catch (e) {
       console.error(e);
-      alert("Failed to save snippet.");
     } finally {
       closeModal(); 
     }
   };
 
-  // --- NEW: DIRECT FIRESTORE IMAGE UPLOAD (BASE64) ---
   const handleFileUpload = async (file: File | undefined, dropX?: number, dropY?: number) => {
     if (!file) return;
-
-    // Strict 1MB Check for Firestore Documents
     const MAX_FILE_SIZE = 1000000; 
     if (file.size > MAX_FILE_SIZE) {
       alert(`⚠️ File is too large! The database has a strict 1MB limit. Please choose a smaller file.`);
       return;
     }
-
     setIsUploading(true);
     const fileType = file.type.startsWith('video/') ? 'video' : 'image';
-
     try {
       const reader = new FileReader();
       reader.readAsDataURL(file);
       reader.onload = async () => {
         const base64Content = reader.result as string;
-        
         await setDoc(doc(db, 'snippets', `node_${Date.now()}`), {
           boardId, type: 'aiCard', position: { x: dropX || window.innerWidth/2, y: dropY || window.innerHeight/2 },
           data: { type: fileType, title: file.name, content: base64Content, timestamp: new Date().toISOString() }
         });
         setIsUploading(false);
       };
-      reader.onerror = (error) => {
-        console.error("Error converting file:", error);
-        alert("Failed to read file for database storage.");
-        setIsUploading(false);
-      };
     } catch (e: any) { 
-      console.error(e); 
-      alert(`Upload failed: ${e.message}`);
       setIsUploading(false); 
     }
   };
@@ -372,7 +367,10 @@ function CanvasBoard() {
         <div className={`bg-gray-200 ${isOverlay ? 'w-px h-6' : 'w-full h-px my-auto'}`}></div>
         <ToolButton icon={<ImageIcon />} label="Image" onClick={() => fileInputRef.current?.click()} />
         <ToolButton icon={<Video />} label="Video" onClick={() => fileInputRef.current?.click()} />
-        <ToolButton icon={<Link2 />} label="Embed" onClick={handleAddEmbed} />
+        
+        {/* NEW EMBED MODAL TRIGGER */}
+        <ToolButton icon={<Link2 />} label="Embed" onClick={() => setIsEmbedModalOpen(true)} />
+        
         <div className={`bg-gray-200 ${isOverlay ? 'w-px h-6' : 'w-full h-px my-auto'}`}></div>
         
         <div className="relative flex flex-col items-center">
@@ -390,7 +388,6 @@ function CanvasBoard() {
         <ToolButton icon={<Wand2 className="text-purple-600" />} label="Organize" onClick={magicOrganize} />
       </div>
 
-
       {/* --- THE GEMINI-STYLE CHAT INTERFACE --- */}
       {isChatOpen && (
         <div className={
@@ -398,7 +395,6 @@ function CanvasBoard() {
             ? "fixed inset-0 z-50 bg-white flex flex-col animate-in fade-in duration-300" 
             : "absolute bottom-24 right-6 w-[420px] max-w-[90vw] h-[650px] bg-white border border-gray-200 rounded-3xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-5 z-40"
         }>
-          
           <div className="px-6 py-4 flex justify-between items-center bg-white border-b border-gray-100 shrink-0">
             <div className="flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-blue-600" />
@@ -416,28 +412,20 @@ function CanvasBoard() {
 
           <div ref={chatScrollRef} className="flex-1 overflow-y-auto bg-white">
             <div className={`mx-auto w-full space-y-8 py-8 ${isFullscreenChat ? 'max-w-4xl px-8' : 'px-5'}`}>
-              
               {chatMessages.map((msg, i) => (
                 <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start gap-4'}`}>
                   {msg.role === 'ai' && <div className="shrink-0 mt-1"><Sparkles className="w-6 h-6 text-blue-600" /></div>}
                   {msg.role === 'user' ? (
-                    <div className="bg-gray-100 text-gray-900 px-5 py-3 rounded-[24px] rounded-br-sm max-w-[85%] text-[15px] font-medium leading-relaxed shadow-sm">
-                      {msg.text}
-                    </div>
+                    <div className="bg-gray-100 text-gray-900 px-5 py-3 rounded-[24px] rounded-br-sm max-w-[85%] text-[15px] font-medium leading-relaxed shadow-sm">{msg.text}</div>
                   ) : (
-                    <div className="text-gray-900 text-[15px] leading-relaxed max-w-full whitespace-pre-wrap mt-1">
-                      {msg.text}
-                    </div>
+                    <div className="text-gray-900 text-[15px] leading-relaxed max-w-full whitespace-pre-wrap mt-1">{msg.text}</div>
                   )}
                 </div>
               ))}
-
               {isChatLoading && (
                 <div className="flex justify-start gap-4">
                   <div className="shrink-0 mt-1"><Sparkles className="w-6 h-6 text-blue-600 animate-pulse" /></div>
-                  <div className="text-gray-400 text-[15px] font-medium mt-1 flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" /> Generating...
-                  </div>
+                  <div className="text-gray-400 text-[15px] font-medium mt-1 flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Generating...</div>
                 </div>
               )}
             </div>
@@ -445,22 +433,9 @@ function CanvasBoard() {
 
           <div className={`bg-white shrink-0 pb-6 pt-2 ${isFullscreenChat ? 'w-full max-w-4xl mx-auto px-8' : 'px-5'}`}>
             <form onSubmit={handleSendMessage} className="relative flex items-end gap-2 bg-gray-100 rounded-[28px] p-2 focus-within:bg-gray-200/50 transition-colors border border-gray-200/50">
-              <input 
-                value={chatInput} 
-                onChange={(e) => setChatInput(e.target.value)} 
-                placeholder="Ask BrainCache AI..." 
-                className="flex-1 bg-transparent px-4 py-3 min-h-[48px] text-[15px] text-gray-900 placeholder-gray-500 font-medium outline-none"
-                disabled={isChatLoading} 
-              />
-              <button 
-                type="submit" 
-                disabled={!chatInput.trim() || isChatLoading} 
-                className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500 shrink-0 mb-0.5 mr-0.5 transition-colors"
-              >
-                <Send className="w-5 h-5" />
-              </button>
+              <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Ask BrainCache AI..." className="flex-1 bg-transparent px-4 py-3 min-h-[48px] text-[15px] text-gray-900 placeholder-gray-500 font-medium outline-none" disabled={isChatLoading} />
+              <button type="submit" disabled={!chatInput.trim() || isChatLoading} className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500 shrink-0 mb-0.5 mr-0.5 transition-colors"><Send className="w-5 h-5" /></button>
             </form>
-            {isFullscreenChat && <p className="text-center text-[11px] text-gray-400 mt-4 font-medium">BrainCache AI may display inaccurate info, so double-check its responses.</p>}
           </div>
         </div>
       )}
@@ -468,11 +443,7 @@ function CanvasBoard() {
       {/* Floating Chat Toggle Button */}
       {!isFullscreenChat && (
         <div className={`absolute bottom-6 right-6 z-30 ${isOverlay ? 'hidden' : ''}`}>
-          <button 
-            onClick={() => setIsChatOpen(!isChatOpen)} 
-            className="p-4 rounded-full shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center justify-center bg-blue-600 text-white hover:bg-blue-700"
-            title="Chat with Board AI"
-          >
+          <button onClick={() => setIsChatOpen(!isChatOpen)} className="p-4 rounded-full shadow-2xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center justify-center bg-blue-600 text-white hover:bg-blue-700" title="Chat with Board AI">
             {isChatOpen ? <X className="w-6 h-6" /> : <Sparkles className="w-6 h-6" />}
           </button>
         </div>
@@ -483,7 +454,7 @@ function CanvasBoard() {
         {!isOverlay && <Controls className="hidden md:flex bg-white border-gray-200 shadow-sm rounded-xl overflow-hidden" showInteractive={false} />}
       </ReactFlow>
 
-      {/* Modals */}
+      {/* Snippet Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-[550px] rounded-3xl p-6 shadow-2xl animate-in fade-in zoom-in-95 border border-gray-200">
@@ -500,6 +471,29 @@ function CanvasBoard() {
         </div>
       )}
 
+      {/* --- NEW: CUSTOM EMBED MODAL --- */}
+      {isEmbedModalOpen && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white w-full max-w-[500px] rounded-3xl p-6 shadow-2xl animate-in zoom-in-95 border border-gray-200">
+             <div className="flex justify-between items-center border-b border-gray-100 pb-4 mb-6">
+               <h2 className="font-bold uppercase text-black text-sm flex items-center gap-2"><Link2 className="w-4 h-4 text-blue-600" /> Add Embed or AI Link</h2>
+               <button onClick={() => {setIsEmbedModalOpen(false); setEmbedInput('');}}><X className="w-5 h-5 text-gray-400 hover:text-gray-900" /></button>
+             </div>
+             <div className="space-y-6">
+               <input 
+                 value={embedInput} 
+                 onChange={(e) => setEmbedInput(e.target.value)} 
+                 placeholder="Paste Figma, YouTube, Google Docs, or Gemini link here..." 
+                 className="w-full p-4 bg-gray-50 border border-gray-200 rounded-xl text-black outline-none font-medium text-gray-900 focus:ring-2 focus:ring-blue-500/20" 
+                 autoFocus
+               />
+               <button onClick={saveEmbedCard} disabled={!embedInput.trim()} className="w-full py-4 bg-blue-600 disabled:bg-blue-300 text-white font-bold rounded-xl shadow-md hover:bg-blue-700 transition-colors">Add to Board</button>
+             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Modal */}
       {isShareModalOpen && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
